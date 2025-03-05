@@ -1,148 +1,177 @@
-import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { Button, Input, notification, Spin, Upload, Select } from "antd";
-import { useGetProductQuery, useUpdateProductMutation } from "../../services/apiProduct";
-import { useGetCategoriesQuery } from "../../services/apiCategory"; // Імпортуємо запит на категорії
-import { APP_ENV } from "../../env";
-import { UploadFile } from "antd/es/upload/interface";
+import {useState, useEffect} from "react";
+import {useNavigate, useParams} from "react-router-dom";
+import {Button, Input, Upload, Select, Form} from "antd";
+import {PlusOutlined} from "@ant-design/icons";
+import {useGetProductQuery, useUpdateProductMutation} from "../../services/apiProduct";
+import {useGetCategoriesQuery} from "../../services/apiCategory";
+import {UploadFile} from "antd/es/upload/interface";
+import {DragDropContext, Droppable, Draggable} from "@hello-pangea/dnd";
+import {DropResult} from "@hello-pangea/dnd";
+import {APP_ENV} from "../../env";
+import {IProductPutRequest} from "../../services/types";
+import Item from "antd/es/list/Item";
+
 
 const EditProductPage = () => {
-    const { id } = useParams<{ id: string }>();
-    const { data: product, isLoading: isProductLoading } = useGetProductQuery(Number(id));
-    const { data: categories, isLoading: isCategoriesLoading } = useGetCategoriesQuery();
-    const [updateProduct] = useUpdateProductMutation();
+    const {id} = useParams<{ id: string }>();
     const navigate = useNavigate();
+    const {data: productData} = useGetProductQuery(Number(id));
+    const {data: categories, isLoading: isCategoriesLoading, error: categoriesError} = useGetCategoriesQuery();
+    const [updateProduct] = useUpdateProductMutation();
 
-    const [editedProduct, setEditedProduct] = useState({
-        id: 0,
-        name: "",
-        price: 0,
-        categoryId: "",
-        images: [] as File[],
-    });
+    const [form] = Form.useForm<IProductPutRequest>();
 
     const [fileList, setFileList] = useState<UploadFile[]>([]);
 
     useEffect(() => {
-        if (product) {
-            setEditedProduct({
-                id: Number(id),
-                name: product.name || "",
-                price: product.price || 0,
-                categoryId: product.categoryId || "",
-                images: [],
+        if (productData) {
+
+            console.log("Category id", productData.categoryId);
+            form.setFieldsValue({
+                ...form.getFieldsValue(),
+                ...productData
             });
 
-            // Формуємо список файлів для відображення
-            const initialFiles = product.images?.map((img, index) => ({
-                uid: String(index),
-                name: img.name,
-                url: `${APP_ENV.REMOTE_LARGE_IMAGES_URL}${img.name}`,
-            })) || [];
+            const updatedFileList: UploadFile[] = productData.images?.map((image) => ({
+                uid: image.id.toString(),
+                name: image.name,
+                url: `${APP_ENV.REMOTE_LARGE_IMAGES_URL}${image.name}`,
+                originFileObj: new File([new Blob([''])],image.name,{type: 'old-image'})
+            } as UploadFile)) || [];
 
-            setFileList(initialFiles);
+            setFileList(updatedFileList);
         }
-    }, [product, id]);
+    }, [productData]);
 
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        setEditedProduct({ ...editedProduct, [e.target.name]: e.target.value });
-    };
-
-    const handleCategoryChange = (value: string) => {
-        setEditedProduct({ ...editedProduct, categoryId: value });
-    };
 
     const handleImageChange = (info: { fileList: UploadFile[] }) => {
-        setFileList(info.fileList);
-        const newImages = info.fileList
-            .filter(file => file.originFileObj) 
-            .map(file => file.originFileObj as File);
+        const newFileList = info.fileList.map((file, index) => ({
+            ...file,
+            uid: file.uid || Date.now().toString(),
+            order: index,
+        }));
 
-        console.log("New images added:", newImages); 
-        setEditedProduct({
-            ...editedProduct,
-            images: newImages,
-        });
+        setFileList([...fileList, ...newFileList]);
     };
 
-    const handleSubmit = async () => {
-        const formData = new FormData();
-        formData.append("id", String(editedProduct.id));
-        formData.append("name", editedProduct.name);
-        formData.append("price", String(editedProduct.price));
-        formData.append("categoryId", String(editedProduct.categoryId));
+    const onDragEnd = (result: DropResult) => {
+        if (!result.destination) return;
+        const reorderedFiles = Array.from(fileList);
+        const [movedFile] = reorderedFiles.splice(result.source.index, 1);
+        reorderedFiles.splice(result.destination.index, 0, movedFile);
+        setFileList(reorderedFiles);
+    };
 
-        // Додаємо всі файли (нові)
-        editedProduct.images.forEach((file) => {
-            formData.append("images", file);
-        });
 
-        // Логування для перевірки даних, що відправляються
-        for (const [key, value] of formData.entries()) {
-            console.log(`${key}:`, value);
-        }
-
+    const onFinish = async (values: IProductPutRequest) => {
         try {
-            await updateProduct(formData).unwrap();
-            notification.success({ message: "Продукт оновлено" });
-            navigate("/products");
-        } catch {
-            notification.error({ message: "Помилка оновлення продукту" });
+            values.id = Number(id);
+            values.images=fileList.map(x=> x.originFileObj as File);
+            console.log("Submit Form", values);
+            await updateProduct(values).unwrap();
+            navigate("..");
+        } catch (error) {
+            console.error("Помилка під час створення категорії:", error);
         }
-    };
-
-    if (isProductLoading || isCategoriesLoading) {
-        return <Spin tip="Завантаження..." />;
     }
+
+
+
 
     return (
         <div className="max-w-lg mx-auto my-6">
-            <h1 className="text-3xl font-bold mb-4">Редагувати продукт</h1>
-            <Input
-                name="name"
-                value={editedProduct.name}
-                placeholder="Назва"
-                onChange={handleChange}
-                className="mb-2"
-            />
-            <Input
-                name="price"
-                value={editedProduct.price}
-                placeholder="Ціна"
-                type="number"
-                onChange={handleChange}
-                className="mb-2"
-            />
+            <h1 className="text-3xl font-bold mb-4">Редагування продукт</h1>
+            <Form
+                form={form}
+                onFinish={onFinish}
+                layout="vertical">
 
-            <Select
-                value={editedProduct.categoryId}
-                onChange={handleCategoryChange}
-                className="mb-2 block"
-                placeholder="Виберіть категорію"
-            >
-                {categories?.map((category) => (
-                    <Select.Option key={category.id} value={category.id}>
-                        {category.name}
-                    </Select.Option>
-                ))}
-            </Select>
+                <Form.Item name="name" label="Назва" rules={[{ required: true, message: 'Будь ласка, введіть назву групи!' }]}>
+                    <Input placeholder="Назва" />
+                </Form.Item>
+
+                <Form.Item name="price" label="Ціна" rules={[{ required: true, message: 'Будь ласка, введіть назву групи!' }]}>
+                    <Input placeholder="Ціна" />
+                </Form.Item>
+
+                {isCategoriesLoading ? (
+                    <p>Loading categories...</p>
+                ) : categoriesError ? (
+                    <p className="text-red-500">Failed to load categories</p>
+                ) : (
+                    <Form.Item
+                        label="Категорія"
+                        name="categoryId"
+                        htmlFor="categoryId"
+                        rules={[{required: true, message: "Це поле є обов'язковим!"}]}
+                    >
+                        <Select placeholder="Оберіть категорію: " options={categories?.map(category =>
+                        {
+                            return {
+                                value: category.id,
+                                label: category.name,
+                            };
+
+                        })}/>
+                    </Form.Item>
+                )}
 
 
-            <Upload
-                multiple
-                beforeUpload={() => false}
-                onChange={handleImageChange}
-                className="mb-2 block"
-                accept="image/*"
-                fileList={fileList}
-                listType="picture"
-            >
-                <Button>Вибрати зображення</Button>
-            </Upload>
 
-            <Button type="primary" onClick={handleSubmit}>
-                Зберегти
-            </Button>
+                <DragDropContext onDragEnd={onDragEnd}>
+                    <Droppable droppableId="upload-list" direction="horizontal">
+                        {(provided) => (
+                            <div ref={provided.innerRef} {...provided.droppableProps} className="flex flex-wrap gap-2">
+                                {fileList.map((file, index) => (
+                                    <Draggable key={file.uid} draggableId={file.uid} index={index}>
+                                        {(provided) => (
+                                            <div
+                                                ref={provided.innerRef}
+                                                {...provided.draggableProps}
+                                                {...provided.dragHandleProps}
+                                            >
+                                                <Upload
+                                                    listType="picture-card"
+                                                    fileList={[file]}
+                                                    onRemove={() => {
+                                                        const newFileList = fileList.filter(f => f.uid !== file.uid);
+                                                        setFileList(newFileList);
+                                                        // setProduct({
+                                                        //     ...product,
+                                                        //     images: newFileList.map(f => f.originFileObj as File),
+                                                        // });
+                                                    }}
+                                                />
+                                            </div>
+                                        )}
+                                    </Draggable>
+                                ))}
+                                {provided.placeholder}
+                            </div>
+                        )}
+                    </Droppable>
+                </DragDropContext>
+
+                <Upload
+                    multiple
+                    listType="picture-card"
+                    beforeUpload={() => false}
+                    onChange={handleImageChange}
+                    fileList={[]}
+                    accept="image/*"
+                >
+                    <div>
+                        <PlusOutlined/>
+                        <div style={{marginTop: 8}}>Додати</div>
+                    </div>
+                </Upload>
+
+                <Item>
+                    <Button type="primary" htmlType="submit" block>
+                        Зберегти
+                    </Button>
+                </Item>
+            </Form>
         </div>
     );
 };
